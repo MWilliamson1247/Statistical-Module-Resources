@@ -1,0 +1,666 @@
+---
+title: "Bayesian Methods"
+date: "April 2025"
+author: "Mark R. Williamson"
+output: html_document
+---
+# Part 1: Setup
+
+## References
+[Bayesian One-Sample T-Test (Stan)](https://cran.r-project.org/web/packages/bridgesampling/vignettes/bridgesampling_stan_ttest.html)
+[Bayes Factor](https://cran.r-project.org/web/packages/BayesFactor/vignettes/manual.html)
+
+https://learningstatisticswithr.com/book/bayes.html#bayesregression
+https://michael-franke.github.io/Bayesian-Regression/practice-sheets/01b-regression-BRMS.html
+https://www.bayesrulesbook.com/chapter-8.html
+https://search.r-project.org/CRAN/refmans/bayesreg/html/bayesreg-package.html
+
+## Get Libraries
+```{r library, include=FALSE}
+library(bridgesampling)
+#library(rstan)
+library(BayesFactor)
+library(ggplot2)
+library(sdamr)
+library(MASS)
+library(lme4)
+library(rpart)
+library(dplyr)
+library(survival)
+library(ggfortify)
+library(BayesSurvival)
+library(bayesreg)
+library(corrplot)
+
+#https://www.r-inla.org/
+
+#library(INLA)
+#library(parallel)
+```
+***
+
+## Data
+```{r datasets}
+
+#One-sample t-test
+data(sleep)
+
+#Two-sample t-test
+  #chickwts
+
+#Paired t-test
+sleep_diff <- sleep$extra[sleep$group == 1] - sleep$extra[sleep$group == 2] #group 1-2
+
+#Non-parametric t-test
+data(chickwts)
+## Restrict to two groups
+chickwts = chickwts[chickwts$feed %in% c("horsebean","linseed"),]
+## Drop unused factor levels
+chickwts$feed = factor(chickwts$feed)
+## Plot data
+plot(weight ~  feed, data = chickwts, main = "Chick weights")
+
+#1-Way ANOVA
+data(ToothGrowth)
+ToothGrowth$dose = factor(ToothGrowth$dose)
+levels(ToothGrowth$dose) = c("Low", "Medium", "High")
+
+#2-Way ANOVA
+  #ToothGrowth
+
+#Repeated Measures ANOVA
+data(puzzles)
+
+#Correlation
+data(iris)
+
+#Simple Linear Regression
+data(attitude)
+
+#Multiple Linear Regression
+  #attitude
+
+#Logistic Regression
+data(spambase)
+spambase$is.spam <- factor(spambase$is.spam)
+spambase2<-sample_n(spambase, 500)
+
+#Poisson Regression
+data(warpbreaks)
+
+#Proportion Test
+  #coin flip
+
+#Chi-Square Test of Independence
+data(survey)
+table(survey$W.Hnd)
+table(survey$Sex)
+Shand_df <- table(survey$W.Hnd, survey$Sex)
+
+#Generalized Linear Mixed Model
+data(cake)
+
+#Survival Analysis
+data(veteran)
+veteran$trt <- as.factor(veteran$trt)
+levels(veteran$trt) <- c("standard", "test")
+veteran$prior <- as.factor(veteran$prior)
+levels(veteran$prior) <- c("No", "Yes")
+
+#BEYOND
+
+#Structural Equation Model
+
+#Generalized Estimating Equation
+
+#Generalized Additive Model
+```
+***
+# Part 2: T-Tests
+
+## One-Sample T-test
+```{r one-sample-t-test}
+#Graph
+sleep$x <- c(rep('x',20))
+ggplot(data=sleep, aes(x=x, y=extra)) +
+  geom_boxplot(width=0.25)+
+  geom_dotplot(binaxis='y', stackdir='center')+
+  geom_hline(yintercept=0, color="red", linewidth=1)+
+  labs(y="Extra Sleep", x="")
+
+#Traditional
+t_ttest1 <- t.test(x=sleep$extra, alternative="two.sided", mu=0, paired=FALSE)
+t_ttest1
+
+#Bayesian
+b_ttest1 <-ttestBF(x=sleep$extra, mu=0)
+b_ttest1 #strong evidence for alternative hyp.
+
+b_ttest1_chains <- posterior(b_ttest1, iterations = 10000)
+summary(b_ttest1_chains)
+plot(b_ttest1_chains[,1:2])
+
+```
+***
+
+## Two-Sample T-test
+```{r two-sample-t-test}
+#Graph
+ggplot(data=chickwts, aes(x=feed, y=weight, fill=feed)) +
+  geom_boxplot()+
+  geom_dotplot(binaxis='y', stackdir='center')
+
+#Traditional
+t_ttest2 <- t.test(weight ~ feed, data = chickwts, var.eq=TRUE)
+t_ttest2
+
+#Bayesian
+b_ttest2 <-ttestBF(formula=weight~feed, data=chickwts)
+b_ttest2 #moderate evidence for alternative hyp.
+
+b_ttest2_chains <- posterior(b_ttest2, iterations = 10000)
+summary(b_ttest2_chains)
+plot(b_ttest2_chains[,2]) #horsebean- linseed
+
+```
+***
+
+## Paired t-test
+```{r paired-t-test}
+
+#Graph
+ggplot(data=sleep, aes(x=group, y=extra, group=ID)) +
+  geom_line() + 
+  labs(y="Extra Sleep")
+
+
+#Traditional
+t_ttest3a <- t.test(x=sleep$extra[sleep$group == 1], y=sleep$extra[sleep$group == 2],
+                    alternative="two.sided", paired=TRUE)
+t_ttest3a
+
+t_ttest3b <- t.test(x=sleep_diff, alternative="two.sided", mu=0, paired=FALSE)
+t_ttest3b
+
+#Bayesian
+b_ttest3 <-ttestBF(x=sleep_diff)
+b_ttest3 #strong evidence for alternative hyp.
+
+b_ttest3_chains <- posterior(b_ttest3, iterations = 10000)
+summary(b_ttest3_chains)
+plot(b_ttest3_chains[,1:2])
+
+```
+***
+# Part 3: ANOVA
+
+## One-Way ANOVA
+```{r one-way-ANOVA}
+#issue ref: https://github.com/richarddmorey/BayesFactor/issues/169
+#ggplot ref: https://mspeekenbrink.github.io/sdam-r-companion/bayesian-hypothesis-testing-with-bayes-factors.html
+
+#Graph
+ggplot(data=ToothGrowth, aes(x=dose, y=len, fill=dose)) +
+  geom_boxplot()
+
+#Traditional
+t_anova1 <-aov(len ~ dose, data=ToothGrowth)
+summary(t_anova1)
+
+em_dose <- emmeans(t_anova1, ~ dose)
+contrast(em_dose, "pairwise", adjust = "Tukey")
+
+#Bayesian
+b_anova1 <-anovaBF(len ~ dose, data=ToothGrowth)
+b_anova1  #extreme evidence for alternative hyp.
+
+b_anova1_chains <- posterior(b_anova1, iterations=10000)
+summary(b_anova1_chains)
+plot(b_anova1_chains[,2:4])
+
+colMeans(b_anova1_chains) #get names of columns
+
+b_anova1_plot <-data.frame(category=c(rep("Low",10000), rep("Medium",10000), rep("High",10000)),
+                  values=c(b_anova1_chains[,c("dose-Low")], b_anova1_chains[,c("dose-Medium")],
+                           b_anova1_chains[,c("dose-High")]))
+
+ggplot(data=b_anova1_plot, aes(x=values, fill=category))+
+  geom_density(alpha=0.25)
+
+```
+***
+
+## Two-Way ANOVA
+```{r two-way-ANOVA}
+#Graph
+ggplot(data=ToothGrowth, aes(x=dose, y=len, fill=supp)) +
+  geom_boxplot()
+
+#Traditional
+t_anova2 <-aov(len ~ dose + supp + dose:supp, data=ToothGrowth)
+summary(t_anova2)
+
+em_dose_supp <- emmeans(t_anova2, ~ dose:supp)
+contrast(em_dose_supp, "pairwise", adjust = "Tukey")
+
+#Bayesian
+b_anova2 <-anovaBF(len ~ dose + supp + dose:supp, data=ToothGrowth)
+b_anova2  #large effect of dose, small effect of supplement, maybe an interaction
+  #Index [4] is full model
+
+#check top models
+anovaBF(len ~ supp*dose, data=ToothGrowth, whichModels="top") #removing any effect reduces model fit
+  
+b_anova2_chains <- posterior(b_anova2, index=4, iterations=10000)
+summary(b_anova2_chains[,1:13])
+plot(b_anova2_chains[,7:12])
+
+colMeans(b_anova2_chains) #get names of columns
+
+#WRONG - NIX FOR NOW
+b_anova2_plot <-data.frame(
+                  category=c(rep("OJ-LOW",10000), rep("OJ-Med",10000), rep("OJ-High",10000),
+                             rep("VC-LOW",10000), rep("VC-Med",10000), rep("VC-High",10000)
+                             ),
+                  values=c(b_anova2_chains[,c("supp:dose-OJ.&.Low")], b_anova2_chains[,c("supp:dose-OJ.&.Medium")],
+                           b_anova2_chains[,c("supp:dose-OJ.&.High")], b_anova2_chains[,c("supp:dose-VC.&.Low")],
+                           b_anova2_chains[,c("supp:dose-VC.&.Medium")], b_anova2_chains[,c("supp:dose-VC.&.High")]
+                           ))
+
+ggplot(data=b_anova2_plot, aes(x=values, fill=category))+
+  geom_density(alpha=0.25)
+```
+***
+
+## Repeated-Measures ANOVA
+```{r rm-ANOVA}
+#Graph
+ggplot(data=puzzles, aes(x=shape, y=RT, fill=color)) +
+  geom_boxplot() +
+  scale_fill_manual(values=c("orange","white"))
+
+#Traditional
+t_anova3 <-aov(RT ~ shape*color + Error(ID/(shape*color)), data=puzzles)
+summary(t_anova3)
+
+em_shape_color <- emmeans(t_anova3, ~ shape:color)
+contrast(em_shape_color, "pairwise", adjust = "Tukey")
+
+#Bayesian
+b_anova3 <- anovaBF(RT ~ shape*color + ID, data = puzzles, 
+             whichRandom="ID") 
+b_anova3 # Main effects model has strongest support [index=3]
+plot(b_anova3)
+
+b_anova3_chains <- posterior(b_anova3, index=3, iterations=10000)
+plot(b_anova3_chains[,2:3])
+plot(b_anova3_chains[,4:5])
+
+  #compare random effects to non-random effects
+bfWithoutID <- lmBF(RT ~ shape*color, data = puzzles)
+bfWithoutID
+
+bfOnlyID <- lmBF(RT ~ ID, whichRandom="ID",data = puzzles)
+bfOnlyID
+
+bf2 <- bfWithoutID / bfOnlyID
+bf2
+
+b_anova3[4] / bf2 #random effects much preferred
+  
+b_anova3_chains <- posterior(b_anova3, index=3, iterations=10000)
+summary(b_anova3_chains)
+
+colMeans(b_anova3_chains) #get names of columns
+
+#PLOTS NOT WORKING
+b_anova3_plot <-data.frame(
+                  Shape=c(rep("round",10000), rep("square",10000)),
+                  Color=c(rep("color",10000), rep("monoch",10000)),
+                  S_values=c(b_anova3_chains[,c("shape-round")], b_anova3_chains[,c("shape-square")]),
+                  C_values=c(b_anova3_chains[,c("color-color")], b_anova3_chains[,c("color-monochromatic")]))
+                  
+ggplot(data=b_anova3_plot, aes(x=S_values, fill=Shape))+
+  geom_density(alpha=0.25)
+ggplot(data=b_anova3_plot, aes(x=C_values, fill=Color))+
+  geom_density(alpha=0.25)
+
+b_anova3_chains2 <- posterior(b_anova3, index=4, iterations=10000)
+colMeans(b_anova3_chains2)
+
+b_anova3_plot2 <-data.frame(
+                  category=c(rep("round+color",10000), 
+                             rep("round+monoch",10000), 
+                             rep("square+color",10000),
+                             rep("square+monoch",10000)
+                             ),
+                  values=c(b_anova3_chains2[,c("shape:color-round.&.color")],
+                           b_anova3_chains2[,c("shape:color-round.&.monochromatic")],
+                           b_anova3_chains2[,c("shape:color-square.&.color")],
+                           b_anova3_chains2[,c("shape:color-square.&.monochromatic")]
+                           ))
+
+ggplot(data=b_anova3_plot2, aes(x=values, fill=category))+
+  geom_density(alpha=0.25)
+
+b_anova3_plot3 <-data.frame(
+                  category=c(rep("round",10000), 
+                             rep("square",10000), 
+                             rep("color",10000),
+                             rep("monoch",10000)
+                             ),
+                  values=c(b_anova3_chains2[,c("shape-round")],
+                           b_anova3_chains2[,c("shape-square")],
+                           b_anova3_chains2[,c("color-color")],
+                           b_anova3_chains2[,c("color-monochromatic")]
+                           ))
+
+ggplot(data=b_anova3_plot3, aes(x=values, fill=category))+
+  geom_density(alpha=0.25)
+
+
+```
+***
+# Part 4: Correlation and Regression
+
+#Correlation
+```{r correlation}
+#Graph
+ggplot(data=iris, aes(x=Sepal.Length, y=Sepal.Width))+
+  geom_point()+
+  geom_smooth(method="lm", se=FALSE) 
+
+#Traditional
+t_cor1 <- cor.test(y = iris$Sepal.Length, x = iris$Sepal.Width)
+t_cor1
+  #cor = -0.118
+
+#Bayesian
+b_cor1 <- correlationBF(y = iris$Sepal.Length, x = iris$Sepal.Width)
+b_cor1 #Anecdotal evidence for null hypothesis
+
+b_cor1_chains <- posterior(b_cor1, iterations=10000)
+summary(b_cor1_chains)
+plot(b_cor1_chains[,"rho"])
+```
+***
+
+#Simple Linear Regression
+```{r simple-linear-regression}
+#Graph
+ggplot(data=attitude, aes(x=raises, y=rating))+
+  geom_point()+
+  geom_smooth(method="lm", se=TRUE) 
+    # Estimate = 0.69
+    # Intercept = 19.98
+
+#Traditional
+t_reg1 <-lm(rating ~ raises, data=attitude)
+summary(t_reg1)
+
+#Bayesian
+b_reg1 <-regressionBF(rating ~ raises, data=attitude)
+b_reg1 #very strong evidence for alternative hypothesis
+
+b_reg1_chains <- posterior(b_reg1, index=1, iterations=10000)
+summary(b_reg1_chains)
+  #Estimate = 0.62
+```
+***
+
+#Multiple Linear Regression
+```{r multiple-linear regression}
+#Graph
+corrplot(cor(attitude))
+
+#Traditional
+t_reg2 <-lm(rating ~ raises + complaints + privileges + learning + critical + advance, data=attitude)
+summary(t_reg2) #complaints significant
+
+#Bayesian
+b_reg2 <-regressionBF(rating ~ raises + complaints + privileges + learning + critical + advance, data=attitude)
+length(b_reg2) #63 models
+
+#full model
+b_reg2["raises + complaints + privileges + learning + critical + advance"]
+
+#top 10 models
+head(b_reg2, n=10) #complaints only is far and away the best
+
+#compare top models
+b_reg2_comp <- head(b_reg2) / max(b_reg2)
+b_reg2_comp 
+plot(b_reg2_comp)
+
+#examining trad vs. bayesian model outputs
+t_reg2B <- lm(rating ~ complaints, data=attitude)
+summary(t_reg2B)
+
+b_reg2B <- regressionBF(rating ~ complaints, data=attitude)
+b_reg2_chains <- posterior(b_reg2B, index=1, iterations=10000)
+summary(b_reg2_chains)
+```
+***
+
+#Logistic Regression
+```{r logistic-regression}
+
+#Graph
+  #N/A
+
+#Traditional
+t_logistic <- glm(is.spam ~ word.freq.money + word.freq.free + 
+                            word.freq.credit+ word.freq.font +
+                            word.freq.edu   + word.freq.1999,
+                            data=spambase2, family="binomial")
+summary(t_logistic)
+
+#Bayesian
+b_logistic <- bayesreg(is.spam ~ word.freq.money + word.freq.free + 
+                                 word.freq.credit+ word.freq.font +
+                                 word.freq.edu   + word.freq.1999,
+                                 data=spambase2, model="logistic")
+summary(b_logistic)
+```
+***
+
+#Poisson Regression
+```{r poisson-regression}
+
+#Graph
+ggplot(data=warpbreaks, aes(y=breaks, x=wool)) + 
+  geom_boxplot()
+ggplot(data=warpbreaks, aes(y=breaks, x=tension)) + 
+  geom_boxplot()
+ggplot(data=warpbreaks, aes(y=breaks, x=wool, fill=tension)) + 
+  geom_boxplot()
+
+#Traditional
+t_poisson <- glm(breaks ~ wool*tension, data=warpbreaks, family="poisson")
+summary(t_poisson)
+
+em_wool_tension <- emmeans(t_poisson, ~ wool:tension)
+contrast(em_wool_tension, "pairwise", adjust = "Tukey")
+
+#Bayesian
+b_poisson <- bayesreg(breaks ~ wool*tension, data=warpbreaks, model="poisson",
+                      burnin=10000)
+summary(b_poisson)
+```
+***
+# Part 5: Frequency Analysis
+
+#Proportion Test
+```{r proportion}
+#Graph
+  #N/A
+
+#Traditional
+t_prop <- binom.test(x=63, n=100, p=0.5)
+t_prop #significantly different from null
+
+#Bayesian
+b_prop <- proportionBF(y=63, N=100, p=0.5)
+b_prop #moderate evidence for alternative
+
+b_prop_chains <- posterior(b_prop, iterations=10000)
+plot(b_prop_chains[,"p"])
+```
+***
+
+#Chi-Square Test of Independence
+```{r chi-square-ind}
+#Graph
+
+#Traditional
+Shand_df[1]/Shand_df[2] *100 #percentage of left-handed females = 6.4%
+Shand_df[3]/Shand_df[4] *100 #percentage of left-handed males   = 9.3%
+
+t_freq <- chisq.test(Shand_df) 
+t_freq #not significant
+
+#Bayesian
+b_freq <- contingencyTableBF(Shand_df, sampleType = "indepMulti", fixedMargin = "cols")
+b_freq #moderate evidence for the null
+
+b_freq_chains <- posterior(b_freq, iterations = 10000)
+plot(b_freq_chains)
+
+LeftGivenMale  <- b_freq_chains[,"pi[1,1]"] / b_freq_chains[,"pi[*,1]"]
+LeftGivenFemale<- b_freq_chains[,"pi[1,2]"] / b_freq_chains[,"pi[*,2]"]
+
+plot(mcmc(LeftGivenMale  - LeftGivenFemale))
+
+```
+***
+# Part 6: Advanced Models
+
+#Generalized Linear Mixed Model
+```{r}
+
+#Graph
+ggplot(data=cake, aes(x=angle))+
+  geom_histogram(bins=12, fill='grey', color='black')
+
+ggplot(data=cake, aes(y=angle, x=recipe, fill=recipe))+
+  geom_boxplot()
+ggplot(data=cake, aes(y=angle, x=temperature, fill=temperature))+
+  geom_boxplot()
+
+#Traditional
+t_glmm0 <- lm(angle ~ recipe + temperature, data=cake)
+summary(t_glmm0)
+
+t_glmm1 <- lmer(angle ~ recipe + temperature + (1|replicate), data=cake)
+summary(t_glmm1)
+
+t_glmm2 <- glmer(angle ~ recipe + temperature + (1|replicate), family=poisson, data=cake)
+summary(t_glmm2)
+
+t_glmm3 <- glmer.nb(angle ~ recipe + temperature + (1|replicate), data=cake)
+summary(t_glmm3)
+
+
+#Bayesian
+b_glmm <- generalTestBF(angle ~ recipe + temperature + replicate, data=cake, whichRandom="replicate")
+b_glmm #best model is temperature + replicate
+
+b_glmm_chains <- posterior(b_glmm, index=6, iterations=10000)
+summary(b_glmm_chains)
+plot(b_glmm_chains[,1:2])
+
+Temp_175 <- b_glmm_chains[,"temperature-175"]
+Temp_225 <- b_glmm_chains[,"temperature-225"]
+
+plot(mcmc(Temp_225-Temp_175))
+
+#Additional
+Temp_215 <- b_glmm_chains[,"temperature-215"]
+
+plot(mcmc(Temp_225-Temp_215))
+plot(mcmc(Temp_215-Temp_175))
+```
+***
+
+#Survival Analysis
+```{r}
+
+#ref: https://becarioprecario.bitbucket.io/inla-gitbook/ch-survival.html#non-parametric-estimation-of-the-survival-curve
+
+#data formatting
+veteran$time.m <- round(veteran$time / 30, 3)
+
+#Traditional
+t_surv <- Surv(veteran$time.m, veteran$status)
+
+t_km_1 <- survfit(t_surv ~ 1)
+t_km_2 <- survfit(t_surv ~ -1 + trt, data = veteran)
+
+t_cox <- coxph(t_surv ~ trt, data=veteran)
+summary(t_cox)
+
+autoplot(t_km_1)
+autoplot(t_km_2)
+
+#Bayesian
+b_surv_1 <- BayesSurv(df=veteran, time="time.m", event="status")
+
+PlotBayesSurv(b_surv_1, object = "survival")
+PlotBayesSurv(b_surv_1, object = "cumhaz")
+PlotBayesSurv(b_surv_1, object = "hazard")
+
+plot(b_surv_1$surv.post.mean, b_surv_1$surv.eval.grid)
+
+
+#models for each treatment, then plot
+table(veteran$trt)
+
+veteran_stnd <-veteran[veteran$trt=="standard",]
+veteran_test <-veteran[veteran$trt=="test",]
+
+b_surv_s <- BayesSurv(df=veteran_stnd, time="time.m", event="status")
+b_surv_t <- BayesSurv(df=veteran_test, time="time.m", event="status")
+
+b_surv_trt_plot_ds <- data.frame(Treatment=c(rep("standard",50), rep("test",50)),
+                                 Time     =c(b_surv_s$surv.eval.grid, b_surv_t$surv.eval.grid),
+                                 Survival =c(b_surv_s$surv.post.mean, b_surv_t$surv.post.mean))
+head(b_surv_trt_plot_ds)
+
+ggplot(data=b_surv_trt_plot_ds, aes(x=Time, y=Survival, group=Treatment, colour=Treatment))+
+  geom_line(linewidth=2)
+  #no confidence intervals, but okay
+
+```
+***
+
+#Structural Equation Model
+```{r}
+
+#JAGS format
+#https://www.jstatsoft.org/article/view/v085i04
+  #BEYOND SCOPE
+
+```
+***
+
+#Generalized Estimating Equation
+```{r}
+
+#BEYOND SCOPE
+```
+***
+
+#Generalized Additive Model
+```{r}
+#STAN format
+#https://besjournals.onlinelibrary.wiley.com/doi/full/10.1111/2041-210X.14498
+  #BEYOND SCOPE
+
+
+```
+***
+#Non-parametric models
+```{r}
+#https://link.springer.com/chapter/10.1007/978-3-319-59650-1_24
+```
+
