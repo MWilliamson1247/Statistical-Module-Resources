@@ -8,6 +8,6 @@ There’s a Bayesian Method for That!
 
 Short Videos
 Beyond General Linear Models
-  -Summary: exploring ways to model non-linear relationships
-  -Code: Non-Linear Modles.R
-  -Dataset: non_linear_dataset.csv
+  - Summary: exploring ways to model non-linear relationships
+  - Code: Non-Linear Modles.R
+  - Dataset: non_linear_dataset.csv
